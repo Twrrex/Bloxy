@@ -1,0 +1,1155 @@
+--[[
+    BloxyBlox Hub - LibraryUI
+    Abas padrão: Settings e Config. O jogador/dev adiciona mais abas com Window:AddTab().
+
+    API rápida:
+        local Library = loadstring(readfile("BloxyBloxHub.lua"))()
+        local Window  = Library:CreateWindow({
+            Title = "BloxyBlox Hub",
+            Icon = "rbxassetid://104862457212946",
+            ConfigFolder = "BloxyBloxHub",
+            ConfigExtension = ".txt",     -- ou ".lua"
+            ToggleKey = Enum.KeyCode.RightControl,
+        })
+        local Tab = Window:AddTab("Main")
+        Tab:AddSection("Texto")
+        Tab:AddLabel("Texto")                         -- retorna obj:SetText()
+        Tab:AddButton({Text=, Callback=})
+        Tab:AddToggle({Text=, Default=, Flag=, Callback=})
+        Tab:AddSlider({Text=, Min=, Max=, Default=, Increment=, Flag=, Callback=})
+        Tab:AddDropdown({Text=, Options={}, Default=, Flag=, Callback=})   -- obj:Refresh(opts), obj:Set(v)
+        Tab:AddTextbox({Text=, Default=, Placeholder=, Flag=, Callback=})
+        Tab:AddKeybind({Text=, Default=Enum.KeyCode.F, Flag=, Callback=})
+        Library:Notify({Title=, Content=, Duration=})
+        Library.Flags.SuaFlag   -- valor atual de qualquer elemento com Flag
+]]
+
+local Players = game:GetService("Players")
+local UIS = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local HttpService = game:GetService("HttpService")
+local TeleportService = game:GetService("TeleportService")
+local RunService = game:GetService("RunService")
+
+local LocalPlayer = Players.LocalPlayer
+
+local Library = {
+	Flags = {},
+	Options = {},
+	Settings = { Notifications = true, NotifyDuration = 4 },
+	_conns = {},
+	_dirty = false,
+	_loading = false,
+	_unloaded = false,
+}
+
+local Theme = {
+	Main = Color3.fromRGB(128, 132, 140),
+	Panel = Color3.fromRGB(163, 163, 163),
+	Element = Color3.fromRGB(255, 255, 255),
+	ElementHover = Color3.fromRGB(235, 235, 235),
+	Input = Color3.fromRGB(232, 232, 232),
+	Text = Color3.fromRGB(0, 0, 0),
+	SubText = Color3.fromRGB(80, 80, 80),
+	Accent = Color3.fromRGB(70, 130, 230),
+	Off = Color3.fromRGB(190, 190, 190),
+	Font = Enum.Font.GothamBold,
+	FontReg = Enum.Font.GothamMedium,
+}
+
+---------------------------------------------------------------------
+-- Helpers
+---------------------------------------------------------------------
+local function New(class, props, children)
+	local inst = Instance.new(class)
+	local parent
+	for k, v in pairs(props or {}) do
+		if k == "Parent" then
+			parent = v
+		else
+			inst[k] = v
+		end
+	end
+	for _, c in ipairs(children or {}) do
+		c.Parent = inst
+	end
+	if parent then
+		inst.Parent = parent
+	end
+	return inst
+end
+
+local function Corner(r)
+	return New("UICorner", { CornerRadius = UDim.new(0, r) })
+end
+
+local function Padding(l, t, r, b)
+	return New("UIPadding", {
+		PaddingLeft = UDim.new(0, l), PaddingTop = UDim.new(0, t),
+		PaddingRight = UDim.new(0, r), PaddingBottom = UDim.new(0, b),
+	})
+end
+
+local function List(pad)
+	return New("UIListLayout", { Padding = UDim.new(0, pad or 6), SortOrder = Enum.SortOrder.LayoutOrder })
+end
+
+local function Tween(inst, props, t)
+	local tw = TweenService:Create(inst, TweenInfo.new(t or 0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), props)
+	tw:Play()
+	return tw
+end
+
+local function Connect(signal, fn)
+	local c = signal:Connect(fn)
+	table.insert(Library._conns, c)
+	return c
+end
+
+local function SafeCall(fn, ...)
+	if type(fn) ~= "function" then return end
+	local ok, err = pcall(fn, ...)
+	if not ok then
+		warn("[BloxyBlox Hub] Erro no callback: " .. tostring(err))
+	end
+end
+
+local function Copy(text)
+	local fn = setclipboard or toclipboard or (Clipboard and Clipboard.set)
+	if fn then
+		local ok = pcall(fn, text)
+		return ok
+	end
+	return false
+end
+
+local function GetGuiParent()
+	if gethui then
+		local ok, h = pcall(gethui)
+		if ok and h then return h end
+	end
+	local ok, cg = pcall(function() return game:GetService("CoreGui") end)
+	if ok and cg then
+		-- testa se temos permissão
+		local t = Instance.new("Folder")
+		local okp = pcall(function() t.Parent = cg end)
+		t:Destroy()
+		if okp then return cg end
+	end
+	return LocalPlayer:WaitForChild("PlayerGui")
+end
+
+function Library:_Dirty()
+	if not Library._loading then
+		Library._dirty = true
+	end
+end
+
+---------------------------------------------------------------------
+-- Notificações
+---------------------------------------------------------------------
+local NotifyHolder
+
+local function EnsureNotifyHolder(gui)
+	if NotifyHolder and NotifyHolder.Parent then return end
+	NotifyHolder = New("Frame", {
+		Name = "Notifications",
+		AnchorPoint = Vector2.new(1, 1),
+		Position = UDim2.new(1, -12, 1, -12),
+		Size = UDim2.new(0, 270, 1, -24),
+		BackgroundTransparency = 1,
+		Parent = gui,
+	}, {
+		New("UIListLayout", {
+			Padding = UDim.new(0, 8),
+			SortOrder = Enum.SortOrder.LayoutOrder,
+			VerticalAlignment = Enum.VerticalAlignment.Bottom,
+		}),
+	})
+end
+
+function Library:Notify(opts)
+	if type(opts) == "string" then opts = { Content = opts } end
+	opts = opts or {}
+	if not Library.Settings.Notifications and not opts.Force then return end
+	if not NotifyHolder or not NotifyHolder.Parent then return end
+
+	local duration = opts.Duration or Library.Settings.NotifyDuration or 4
+	local container = New("Frame", {
+		Size = UDim2.new(1, 0, 0, 0),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		BackgroundTransparency = 1,
+		ClipsDescendants = false,
+		Parent = NotifyHolder,
+	})
+	local card = New("Frame", {
+		Position = UDim2.new(1, 300, 0, 0),
+		Size = UDim2.new(1, 0, 0, 0),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		BackgroundColor3 = Theme.Element,
+		BorderSizePixel = 0,
+		Parent = container,
+	}, {
+		Corner(6),
+		Padding(46, 8, 10, 10),
+		New("UIStroke", { Color = Color3.fromRGB(60, 60, 60), Thickness = 1 }),
+		New("UIListLayout", { Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder }),
+	})
+	New("ImageLabel", {
+		Position = UDim2.new(0, -36, 0, 0),
+		Size = UDim2.fromOffset(28, 28),
+		BackgroundTransparency = 1,
+		Image = Library.Icon or "",
+		Parent = card,
+	})
+	New("TextLabel", {
+		LayoutOrder = 1,
+		Size = UDim2.new(1, 0, 0, 16),
+		BackgroundTransparency = 1,
+		Font = Theme.Font, TextSize = 14, TextColor3 = Theme.Text,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Text = opts.Title or "BloxyBlox Hub",
+		Parent = card,
+	})
+	New("TextLabel", {
+		LayoutOrder = 2,
+		Size = UDim2.new(1, 0, 0, 0),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		BackgroundTransparency = 1,
+		Font = Theme.FontReg, TextSize = 13, TextColor3 = Theme.SubText,
+		TextWrapped = true,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Top,
+		Text = tostring(opts.Content or ""),
+		Parent = card,
+	})
+	-- barra de tempo
+	local barBg = New("Frame", {
+		LayoutOrder = 3,
+		Size = UDim2.new(1, 0, 0, 3),
+		BackgroundColor3 = Theme.Off,
+		BorderSizePixel = 0,
+		Parent = card,
+	}, { Corner(2) })
+	local bar = New("Frame", {
+		Size = UDim2.fromScale(1, 1),
+		BackgroundColor3 = Theme.Accent,
+		BorderSizePixel = 0,
+		Parent = barBg,
+	}, { Corner(2) })
+
+	Tween(card, { Position = UDim2.new(0, 0, 0, 0) }, 0.25)
+	Tween(bar, { Size = UDim2.new(0, 0, 1, 0) }, duration)
+
+	task.delay(duration, function()
+		if not card.Parent then return end
+		local tw = Tween(card, { Position = UDim2.new(1, 300, 0, 0) }, 0.25)
+		tw.Completed:Wait()
+		container:Destroy()
+	end)
+end
+
+---------------------------------------------------------------------
+-- Elementos (anexados a cada aba)
+---------------------------------------------------------------------
+local function Row(page, height)
+	return New("Frame", {
+		Size = UDim2.new(1, 0, 0, height),
+		BackgroundColor3 = Theme.Element,
+		BorderSizePixel = 0,
+		Parent = page,
+	}, { Corner(5) })
+end
+
+local function RowLabel(row, text, widthScale)
+	return New("TextLabel", {
+		Position = UDim2.fromOffset(10, 0),
+		Size = UDim2.new(widthScale or 1, -20, 0, 32),
+		BackgroundTransparency = 1,
+		Font = Theme.Font, TextSize = 13, TextColor3 = Theme.Text,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		Text = text or "",
+		Parent = row,
+	})
+end
+
+local function Register(flag, obj)
+	if flag then
+		Library.Options[flag] = obj
+		Library.Flags[flag] = obj.Value
+	end
+end
+
+local function AttachElements(tab, page)
+	function tab:AddSection(text)
+		return New("TextLabel", {
+			Size = UDim2.new(1, 0, 0, 22),
+			BackgroundTransparency = 1,
+			Font = Theme.Font, TextSize = 15, TextColor3 = Theme.Text,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			Text = "  " .. tostring(text),
+			Parent = page,
+		}, {
+			New("Frame", {
+				AnchorPoint = Vector2.new(0, 1),
+				Position = UDim2.new(0, 0, 1, 0),
+				Size = UDim2.new(1, 0, 0, 1),
+				BackgroundColor3 = Color3.fromRGB(70, 70, 70),
+				BorderSizePixel = 0,
+			}),
+		})
+	end
+
+	function tab:AddLabel(text)
+		local lbl = New("TextLabel", {
+			Size = UDim2.new(1, 0, 0, 18),
+			AutomaticSize = Enum.AutomaticSize.Y,
+			BackgroundTransparency = 1,
+			Font = Theme.FontReg, TextSize = 13, TextColor3 = Theme.Text,
+			TextWrapped = true,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			Text = tostring(text),
+			Parent = page,
+		}, { Padding(4, 0, 4, 0) })
+		local obj = {}
+		function obj:SetText(t) lbl.Text = tostring(t) end
+		return obj
+	end
+
+	function tab:AddButton(o)
+		o = o or {}
+		local btn = New("TextButton", {
+			Size = UDim2.new(1, 0, 0, 32),
+			BackgroundColor3 = Theme.Element,
+			AutoButtonColor = false,
+			BorderSizePixel = 0,
+			Font = Theme.Font, TextSize = 13, TextColor3 = Theme.Text,
+			Text = o.Text or "Button",
+			Parent = page,
+		}, { Corner(5) })
+		btn.MouseEnter:Connect(function() Tween(btn, { BackgroundColor3 = Theme.ElementHover }) end)
+		btn.MouseLeave:Connect(function() Tween(btn, { BackgroundColor3 = Theme.Element }) end)
+		btn.MouseButton1Click:Connect(function()
+			Tween(btn, { BackgroundColor3 = Theme.Panel }, 0.08)
+			task.delay(0.1, function() Tween(btn, { BackgroundColor3 = Theme.Element }) end)
+			SafeCall(o.Callback)
+		end)
+		local obj = {}
+		function obj:SetText(t) btn.Text = tostring(t) end
+		return obj
+	end
+
+	function tab:AddToggle(o)
+		o = o or {}
+		local row = Row(page, 32)
+		RowLabel(row, o.Text or "Toggle", 1)
+		local track = New("Frame", {
+			Position = UDim2.new(1, -48, 0.5, -9),
+			Size = UDim2.fromOffset(38, 18),
+			BackgroundColor3 = Theme.Off,
+			BorderSizePixel = 0,
+			Parent = row,
+		}, { Corner(9) })
+		local knob = New("Frame", {
+			Position = UDim2.fromOffset(2, 2),
+			Size = UDim2.fromOffset(14, 14),
+			BackgroundColor3 = Color3.new(1, 1, 1),
+			BorderSizePixel = 0,
+			Parent = track,
+		}, { Corner(7) })
+		local hit = New("TextButton", {
+			Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Text = "", Parent = row,
+		})
+
+		local obj = { Value = o.Default and true or false }
+		local function render()
+			Tween(track, { BackgroundColor3 = obj.Value and Theme.Accent or Theme.Off })
+			Tween(knob, { Position = obj.Value and UDim2.fromOffset(22, 2) or UDim2.fromOffset(2, 2) })
+		end
+		function obj:Set(v, silent)
+			obj.Value = v and true or false
+			if o.Flag then Library.Flags[o.Flag] = obj.Value end
+			render()
+			if not silent then
+				SafeCall(o.Callback, obj.Value)
+				Library:_Dirty()
+			end
+		end
+		hit.MouseButton1Click:Connect(function() obj:Set(not obj.Value) end)
+		track.BackgroundColor3 = obj.Value and Theme.Accent or Theme.Off
+		knob.Position = obj.Value and UDim2.fromOffset(22, 2) or UDim2.fromOffset(2, 2)
+		Register(o.Flag, obj)
+		return obj
+	end
+
+	function tab:AddSlider(o)
+		o = o or {}
+		local min, max, inc = o.Min or 0, o.Max or 100, o.Increment or 1
+		local row = Row(page, 48)
+		New("TextLabel", {
+			Position = UDim2.fromOffset(10, 4), Size = UDim2.new(1, -90, 0, 18),
+			BackgroundTransparency = 1, Font = Theme.Font, TextSize = 13, TextColor3 = Theme.Text,
+			TextXAlignment = Enum.TextXAlignment.Left, Text = o.Text or "Slider", Parent = row,
+		})
+		local valLbl = New("TextLabel", {
+			AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -10, 0, 4), Size = UDim2.fromOffset(70, 18),
+			BackgroundTransparency = 1, Font = Theme.FontReg, TextSize = 13, TextColor3 = Theme.SubText,
+			TextXAlignment = Enum.TextXAlignment.Right, Text = "", Parent = row,
+		})
+		local bar = New("Frame", {
+			Position = UDim2.new(0, 10, 0, 32), Size = UDim2.new(1, -20, 0, 6),
+			BackgroundColor3 = Color3.fromRGB(205, 205, 205), BorderSizePixel = 0, Parent = row,
+		}, { Corner(3) })
+		local fill = New("Frame", {
+			Size = UDim2.fromScale(0, 1), BackgroundColor3 = Theme.Accent, BorderSizePixel = 0, Parent = bar,
+		}, { Corner(3) })
+		local hit = New("TextButton", {
+			Position = UDim2.new(0, 6, 0, 22), Size = UDim2.new(1, -12, 0, 24),
+			BackgroundTransparency = 1, Text = "", Parent = row,
+		})
+
+		local obj = { Value = math.clamp(o.Default or min, min, max) }
+		local function round(v)
+			v = math.clamp(v, min, max)
+			v = math.floor((v - min) / inc + 0.5) * inc + min
+			return tonumber(string.format("%.4f", math.clamp(v, min, max)))
+		end
+		local function render()
+			valLbl.Text = tostring(obj.Value) .. (o.Suffix or "")
+			Tween(fill, { Size = UDim2.fromScale((obj.Value - min) / math.max(max - min, 1e-9), 1) }, 0.08)
+		end
+		function obj:Set(v, silent)
+			obj.Value = round(tonumber(v) or min)
+			if o.Flag then Library.Flags[o.Flag] = obj.Value end
+			render()
+			if not silent then
+				SafeCall(o.Callback, obj.Value)
+				Library:_Dirty()
+			end
+		end
+		local dragging = false
+		local function update(x)
+			local alpha = math.clamp((x - bar.AbsolutePosition.X) / math.max(bar.AbsoluteSize.X, 1), 0, 1)
+			local v = round(min + (max - min) * alpha)
+			if v ~= obj.Value then obj:Set(v) end
+		end
+		hit.InputBegan:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+				dragging = true
+				update(input.Position.X)
+			end
+		end)
+		Connect(UIS.InputChanged, function(input)
+			if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+				update(input.Position.X)
+			end
+		end)
+		Connect(UIS.InputEnded, function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+				dragging = false
+			end
+		end)
+		valLbl.Text = tostring(obj.Value) .. (o.Suffix or "")
+		fill.Size = UDim2.fromScale((obj.Value - min) / math.max(max - min, 1e-9), 1)
+		Register(o.Flag, obj)
+		return obj
+	end
+
+	function tab:AddDropdown(o)
+		o = o or {}
+		local options = o.Options or {}
+		local ITEM_H, MAX_SHOW = 26, 5
+		local row = New("Frame", {
+			Size = UDim2.new(1, 0, 0, 32), BackgroundColor3 = Theme.Element,
+			BorderSizePixel = 0, ClipsDescendants = true, Parent = page,
+		}, { Corner(5) })
+		RowLabel(row, o.Text or "Dropdown", 0.5)
+		local valLbl = New("TextLabel", {
+			AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -28, 0, 0), Size = UDim2.new(0.5, -10, 0, 32),
+			BackgroundTransparency = 1, Font = Theme.FontReg, TextSize = 13, TextColor3 = Theme.SubText,
+			TextXAlignment = Enum.TextXAlignment.Right, TextTruncate = Enum.TextTruncate.AtEnd,
+			Text = "Nenhum", Parent = row,
+		})
+		local arrow = New("TextLabel", {
+			AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -8, 0, 0), Size = UDim2.fromOffset(16, 32),
+			BackgroundTransparency = 1, Font = Theme.Font, TextSize = 11, TextColor3 = Theme.SubText,
+			Text = "v", Parent = row,
+		})
+		local head = New("TextButton", {
+			Size = UDim2.new(1, 0, 0, 32), BackgroundTransparency = 1, Text = "", Parent = row,
+		})
+		local listFrame = New("ScrollingFrame", {
+			Position = UDim2.fromOffset(6, 36), Size = UDim2.new(1, -12, 0, 0),
+			BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 3,
+			CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y, Parent = row,
+		}, { List(2) })
+
+		local obj = { Value = o.Default, Options = options }
+		local open = false
+		local buttons = {}
+
+		local function resize()
+			local h = math.min(#obj.Options, MAX_SHOW) * (ITEM_H + 2)
+			listFrame.Size = UDim2.new(1, -12, 0, h)
+			Tween(row, { Size = UDim2.new(1, 0, 0, open and (32 + h + 8) or 32) }, 0.15)
+			arrow.Text = open and "^" or "v"
+		end
+		local function highlight()
+			for name, b in pairs(buttons) do
+				b.BackgroundColor3 = (name == obj.Value) and Color3.fromRGB(200, 220, 255) or Theme.Input
+			end
+		end
+		local function build()
+			for _, b in pairs(buttons) do b:Destroy() end
+			buttons = {}
+			for i, opt in ipairs(obj.Options) do
+				local name = tostring(opt)
+				local b = New("TextButton", {
+					LayoutOrder = i, Size = UDim2.new(1, -4, 0, ITEM_H), BackgroundColor3 = Theme.Input,
+					BorderSizePixel = 0, AutoButtonColor = false, Font = Theme.FontReg, TextSize = 13,
+					TextColor3 = Theme.Text, Text = name, Parent = listFrame,
+				}, { Corner(4) })
+				b.MouseButton1Click:Connect(function()
+					obj:Set(name)
+					open = false
+					resize()
+				end)
+				buttons[name] = b
+			end
+			highlight()
+		end
+		function obj:Set(v, silent)
+			obj.Value = v
+			valLbl.Text = v ~= nil and tostring(v) or "Nenhum"
+			if o.Flag then Library.Flags[o.Flag] = v end
+			highlight()
+			if not silent then
+				SafeCall(o.Callback, v)
+				Library:_Dirty()
+			end
+		end
+		function obj:Refresh(newOptions, keepValue)
+			obj.Options = newOptions or {}
+			if not keepValue then
+				obj.Value = nil
+				valLbl.Text = "Nenhum"
+				if o.Flag then Library.Flags[o.Flag] = nil end
+			end
+			build()
+			if open then resize() end
+		end
+		head.MouseButton1Click:Connect(function()
+			open = not open
+			resize()
+		end)
+		build()
+		if obj.Value ~= nil then valLbl.Text = tostring(obj.Value) highlight() end
+		Register(o.Flag, obj)
+		return obj
+	end
+
+	function tab:AddTextbox(o)
+		o = o or {}
+		local row = Row(page, 32)
+		RowLabel(row, o.Text or "Textbox", 0.45)
+		local box = New("TextBox", {
+			AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -6, 0.5, 0), Size = UDim2.new(0.55, -10, 0, 22),
+			BackgroundColor3 = Theme.Input, BorderSizePixel = 0, Font = Theme.FontReg, TextSize = 13,
+			TextColor3 = Theme.Text, PlaceholderText = o.Placeholder or "...", PlaceholderColor3 = Color3.fromRGB(120, 120, 120),
+			Text = o.Default or "", ClearTextOnFocus = false, TextTruncate = Enum.TextTruncate.AtEnd, Parent = row,
+		}, { Corner(4), Padding(6, 0, 6, 0) })
+		local obj = { Value = o.Default or "", Box = box }
+		function obj:Set(v, silent)
+			obj.Value = tostring(v or "")
+			box.Text = obj.Value
+			if o.Flag then Library.Flags[o.Flag] = obj.Value end
+			if not silent then
+				SafeCall(o.Callback, obj.Value)
+				Library:_Dirty()
+			end
+		end
+		box.FocusLost:Connect(function()
+			if box.Text ~= obj.Value then obj:Set(box.Text) end
+		end)
+		Register(o.Flag, obj)
+		return obj
+	end
+
+	function tab:AddKeybind(o)
+		o = o or {}
+		local row = Row(page, 32)
+		RowLabel(row, o.Text or "Keybind", 0.6)
+		local default = o.Default
+		if typeof(default) == "EnumItem" then default = default.Name end
+		local obj = { Value = default or "None" }
+		local btn = New("TextButton", {
+			AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -6, 0.5, 0), Size = UDim2.fromOffset(110, 22),
+			BackgroundColor3 = Theme.Input, BorderSizePixel = 0, AutoButtonColor = false, Font = Theme.FontReg,
+			TextSize = 13, TextColor3 = Theme.Text, Text = obj.Value, Parent = row,
+		}, { Corner(4) })
+		local listening = false
+		function obj:Set(v, silent)
+			if typeof(v) == "EnumItem" then v = v.Name end
+			obj.Value = v or "None"
+			btn.Text = obj.Value
+			if o.Flag then Library.Flags[o.Flag] = obj.Value end
+			if not silent then
+				SafeCall(o.ChangedCallback, obj.Value)
+				Library:_Dirty()
+			end
+		end
+		btn.MouseButton1Click:Connect(function()
+			listening = true
+			btn.Text = "..."
+		end)
+		Connect(UIS.InputBegan, function(input, gp)
+			if listening then
+				if input.UserInputType == Enum.UserInputType.Keyboard then
+					listening = false
+					if input.KeyCode == Enum.KeyCode.Escape then
+						btn.Text = obj.Value
+					else
+						obj:Set(input.KeyCode.Name)
+					end
+				end
+				return
+			end
+			if gp then return end
+			if input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode.Name == obj.Value then
+				SafeCall(o.Callback, obj.Value)
+			end
+		end)
+		Register(o.Flag, obj)
+		return obj
+	end
+end
+
+---------------------------------------------------------------------
+-- Janela
+---------------------------------------------------------------------
+function Library:CreateWindow(opts)
+	opts = opts or {}
+	local title = opts.Title or "BloxyBlox Hub"
+	local icon = opts.Icon or "rbxassetid://104862457212946"
+	local folder = opts.ConfigFolder or "BloxyBloxHub"
+	local ext = opts.ConfigExtension or ".txt"
+	Library.Icon = icon
+
+	local parent = GetGuiParent()
+	local old = parent:FindFirstChild("BloxyBloxHubUI")
+	if old then old:Destroy() end
+
+	local gui = New("ScreenGui", {
+		Name = "BloxyBloxHubUI",
+		ResetOnSpawn = false,
+		IgnoreGuiInset = true,
+		DisplayOrder = 999,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+	})
+	if syn and syn.protect_gui then pcall(syn.protect_gui, gui) end
+	gui.Parent = parent
+	Library.Gui = gui
+	EnsureNotifyHolder(gui)
+
+	local W, H = 620, 440
+	local main = New("Frame", {
+		Name = "Main",
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(W, H),
+		BackgroundColor3 = Theme.Main,
+		BorderSizePixel = 0,
+		Parent = gui,
+	}, {
+		Corner(6),
+		New("UIStroke", { Color = Color3.fromRGB(60, 62, 68), Thickness = 1 }),
+		New("UIGradient", {
+			Rotation = 90,
+			Color = ColorSequence.new(Color3.fromRGB(150, 155, 165), Color3.fromRGB(122, 126, 134)),
+		}),
+	})
+	local scale = New("UIScale", { Parent = main })
+	do
+		local cam = workspace.CurrentCamera
+		if cam then
+			local vp = cam.ViewportSize
+			scale.Scale = math.clamp(math.min(vp.X / (W + 40), vp.Y / (H + 40)), 0.5, 1)
+		end
+	end
+
+	-- Header
+	local header = New("Frame", {
+		Size = UDim2.new(1, 0, 0, 44), BackgroundTransparency = 1, Active = true, Parent = main,
+	})
+	New("ImageLabel", {
+		Position = UDim2.fromOffset(10, 6), Size = UDim2.fromOffset(32, 32),
+		BackgroundTransparency = 1, Image = icon, ScaleType = Enum.ScaleType.Fit, Parent = header,
+	})
+	New("TextLabel", {
+		Position = UDim2.fromOffset(50, 0), Size = UDim2.new(1, -100, 1, 0),
+		BackgroundTransparency = 1, Font = Theme.Font, TextSize = 16, TextColor3 = Theme.Text,
+		TextXAlignment = Enum.TextXAlignment.Left, Text = title, Parent = header,
+	})
+	local closeBtn = New("TextButton", {
+		AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -6, 0, 0), Size = UDim2.fromOffset(36, 44),
+		BackgroundTransparency = 1, Font = Theme.Font, TextSize = 22, TextColor3 = Color3.new(1, 1, 1),
+		Text = "X", Parent = header,
+	})
+	New("Frame", {
+		Position = UDim2.fromOffset(0, 44), Size = UDim2.new(1, 0, 0, 1),
+		BackgroundColor3 = Color3.new(0, 0, 0), BorderSizePixel = 0, Parent = main,
+	})
+
+	-- Arrastar
+	do
+		local dragging, dragStart, startPos
+		header.InputBegan:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+				dragging = true
+				dragStart = input.Position
+				startPos = main.Position
+				input.Changed:Connect(function()
+					if input.UserInputState == Enum.UserInputState.End then dragging = false end
+				end)
+			end
+		end)
+		Connect(UIS.InputChanged, function(input)
+			if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+				local d = (input.Position - dragStart) / scale.Scale
+				main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+			end
+		end)
+	end
+
+	-- Corpo
+	local sidebar = New("Frame", {
+		Position = UDim2.fromOffset(8, 52), Size = UDim2.new(0, 150, 1, -60),
+		BackgroundColor3 = Theme.Panel, BorderSizePixel = 0, Parent = main,
+	}, { Corner(3) })
+	local sideScroll = New("ScrollingFrame", {
+		Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, BorderSizePixel = 0,
+		ScrollBarThickness = 0, CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		Parent = sidebar,
+	}, { List(6), Padding(9, 8, 9, 8) })
+	local content = New("Frame", {
+		Position = UDim2.fromOffset(166, 52), Size = UDim2.new(1, -174, 1, -60),
+		BackgroundColor3 = Theme.Panel, BorderSizePixel = 0, Parent = main,
+	}, { Corner(3) })
+
+	local Window = { Tabs = {}, Library = Library }
+	local current
+
+	local function selectTab(t)
+		for _, other in ipairs(Window.Tabs) do
+			other._page.Visible = (other == t)
+			Tween(other._button, { BackgroundColor3 = (other == t) and Theme.Element or Color3.fromRGB(215, 215, 215) })
+		end
+		current = t
+	end
+
+	function Window:AddTab(name)
+		local tab = { Name = name }
+		tab._button = New("TextButton", {
+			Size = UDim2.new(1, 0, 0, 30), BackgroundColor3 = Color3.fromRGB(215, 215, 215),
+			AutoButtonColor = false, BorderSizePixel = 0, Font = Theme.Font, TextSize = 14,
+			TextColor3 = Theme.Text, Text = name, LayoutOrder = #Window.Tabs + 1, Parent = sideScroll,
+		}, { Corner(5) })
+		tab._page = New("ScrollingFrame", {
+			Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, BorderSizePixel = 0,
+			ScrollBarThickness = 3, CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y,
+			Visible = false, Parent = content,
+		}, { List(6), Padding(8, 8, 10, 8) })
+		AttachElements(tab, tab._page)
+		tab._button.MouseButton1Click:Connect(function() selectTab(tab) end)
+		table.insert(Window.Tabs, tab)
+		if not current then selectTab(tab) end
+		return tab
+	end
+
+	function Window:Toggle()
+		main.Visible = not main.Visible
+	end
+	function Window:Notify(o) Library:Notify(o) end
+	function Window:Destroy() Library:Unload() end
+
+	function Library:Unload()
+		Library._unloaded = true
+		for _, c in ipairs(Library._conns) do pcall(function() c:Disconnect() end) end
+		table.clear(Library._conns)
+		gui:Destroy()
+	end
+
+	-----------------------------------------------------------------
+	-- Sistema de config
+	-----------------------------------------------------------------
+	local canFS = (writefile and readfile and isfile and isfolder and makefolder and listfiles and delfile) and true or false
+	local state = { Selected = nil, AutoSave = false, AutoLoad = false }
+	local metaPath = folder .. "/meta.dat"
+
+	local function ensureFolder()
+		if canFS and not isfolder(folder) then pcall(makefolder, folder) end
+	end
+	local function cfgPath(name) return folder .. "/" .. name .. ext end
+	local function sanitize(name)
+		name = tostring(name or ""):gsub("[^%w%-%_ ]", "")
+		name = name:gsub("^%s+", ""):gsub("%s+$", "")
+		return name
+	end
+
+	local function saveMeta()
+		if not canFS then return end
+		ensureFolder()
+		pcall(function() writefile(metaPath, HttpService:JSONEncode(state)) end)
+	end
+	local function loadMeta()
+		if not canFS then return end
+		ensureFolder()
+		if isfile(metaPath) then
+			local ok, data = pcall(function() return HttpService:JSONDecode(readfile(metaPath)) end)
+			if ok and type(data) == "table" then
+				state.Selected = data.Selected
+				state.AutoSave = data.AutoSave and true or false
+				state.AutoLoad = data.AutoLoad and true or false
+			end
+		end
+	end
+
+	function Library:GetConfigs()
+		local list = {}
+		if not canFS then return list end
+		ensureFolder()
+		local ok, files = pcall(listfiles, folder)
+		if not ok then return list end
+		local pat = "([^/\\]+)" .. ext:gsub("%p", "%%%0") .. "$"
+		for _, f in ipairs(files) do
+			local n = f:match(pat)
+			if n then table.insert(list, n) end
+		end
+		table.sort(list)
+		return list
+	end
+
+	function Library:SaveConfig(name, silent)
+		if not canFS then return false, "Seu executor não suporta arquivos." end
+		name = sanitize(name)
+		if name == "" then return false, "Nome inválido." end
+		ensureFolder()
+		local ok, err = pcall(function()
+			writefile(cfgPath(name), HttpService:JSONEncode(Library.Flags))
+		end)
+		if not ok then return false, tostring(err) end
+		return true
+	end
+
+	function Library:LoadConfig(name)
+		if not canFS then return false, "Seu executor não suporta arquivos." end
+		name = sanitize(name)
+		local path = cfgPath(name)
+		if name == "" or not isfile(path) then return false, "Config não encontrada." end
+		local ok, data = pcall(function() return HttpService:JSONDecode(readfile(path)) end)
+		if not ok or type(data) ~= "table" then return false, "Arquivo de config inválido." end
+		Library._loading = true
+		for flag, value in pairs(data) do
+			local opt = Library.Options[flag]
+			if opt and opt.Set then
+				pcall(function() opt:Set(value) end)
+			end
+		end
+		Library._loading = false
+		Library._dirty = false
+		return true
+	end
+
+	function Library:DeleteConfig(name)
+		if not canFS then return false, "Seu executor não suporta arquivos." end
+		name = sanitize(name)
+		local path = cfgPath(name)
+		if not isfile(path) then return false, "Config não encontrada." end
+		local ok, err = pcall(delfile, path)
+		return ok, ok and nil or tostring(err)
+	end
+
+	loadMeta()
+
+	-- Auto save
+	task.spawn(function()
+		while not Library._unloaded do
+			task.wait(2)
+			if Library._dirty and state.AutoSave and state.Selected then
+				Library._dirty = false
+				Library:SaveConfig(state.Selected, true)
+			end
+		end
+	end)
+
+	local autoLoaded = false
+	function Window:LoadAutoConfig()
+		if autoLoaded then return end
+		autoLoaded = true
+		if state.AutoLoad and state.Selected then
+			local ok, err = Library:LoadConfig(state.Selected)
+			if ok then
+				Library:Notify({ Title = "Config", Content = "Config '" .. state.Selected .. "' carregada automaticamente." })
+			else
+				Library:Notify({ Title = "Config", Content = tostring(err), Force = true })
+			end
+		end
+	end
+	-- carrega sozinho depois que o script terminar de montar as abas
+	task.delay(1.5, function() if not Library._unloaded then Window:LoadAutoConfig() end end)
+
+	-----------------------------------------------------------------
+	-- Aba Settings
+	-----------------------------------------------------------------
+	local settings = Window:AddTab("Settings")
+
+	settings:AddSection("Notificações")
+	settings:AddToggle({
+		Text = "Ativar notificações", Default = true, Flag = "BB_Notifications",
+		Callback = function(v) Library.Settings.Notifications = v end,
+	})
+	settings:AddSlider({
+		Text = "Duração das notificações", Min = 1, Max = 10, Default = 4, Increment = 1, Suffix = "s",
+		Flag = "BB_NotifyDuration",
+		Callback = function(v) Library.Settings.NotifyDuration = v end,
+	})
+	settings:AddButton({
+		Text = "Testar notificação",
+		Callback = function()
+			Library:Notify({ Title = "BloxyBlox Hub", Content = "Notificação de teste funcionando!" })
+		end,
+	})
+
+	settings:AddSection("Interface")
+	local toggleKey = opts.ToggleKey or Enum.KeyCode.RightControl
+	settings:AddKeybind({
+		Text = "Abrir/Fechar UI", Default = toggleKey, Flag = "BB_ToggleKey",
+		Callback = function() Window:Toggle() end,
+	})
+	settings:AddButton({
+		Text = "Descarregar UI",
+		Callback = function() Library:Unload() end,
+	})
+
+	settings:AddSection("Servidor")
+	local jobId = game.JobId ~= "" and game.JobId or "(vazio no Studio)"
+	settings:AddLabel("JobID: " .. jobId)
+	settings:AddLabel("PlaceId: " .. tostring(game.PlaceId))
+	settings:AddButton({
+		Text = "Copiar JobID",
+		Callback = function()
+			if Copy(game.JobId) then
+				Library:Notify({ Title = "Servidor", Content = "JobID copiado!" })
+			else
+				Library:Notify({ Title = "Servidor", Content = "Seu executor não suporta clipboard.", Force = true })
+			end
+		end,
+	})
+	settings:AddButton({
+		Text = "Copiar PlaceId",
+		Callback = function()
+			if Copy(tostring(game.PlaceId)) then
+				Library:Notify({ Title = "Servidor", Content = "PlaceId copiado!" })
+			else
+				Library:Notify({ Title = "Servidor", Content = "Seu executor não suporta clipboard.", Force = true })
+			end
+		end,
+	})
+	settings:AddButton({
+		Text = "Copiar script de join",
+		Callback = function()
+			local s = string.format(
+				'game:GetService("TeleportService"):TeleportToPlaceInstance(%d, "%s", game.Players.LocalPlayer)',
+				game.PlaceId, game.JobId
+			)
+			if Copy(s) then
+				Library:Notify({ Title = "Servidor", Content = "Script de join copiado!" })
+			else
+				Library:Notify({ Title = "Servidor", Content = "Seu executor não suporta clipboard.", Force = true })
+			end
+		end,
+	})
+	local joinBox = settings:AddTextbox({ Text = "JobID para entrar", Placeholder = "cole o JobID aqui" })
+	settings:AddButton({
+		Text = "Entrar no JobID",
+		Callback = function()
+			local id = joinBox.Box.Text:gsub("%s", "")
+			if id == "" then
+				Library:Notify({ Title = "Servidor", Content = "Cole um JobID primeiro.", Force = true })
+				return
+			end
+			Library:Notify({ Title = "Servidor", Content = "Teleportando..." })
+			pcall(function() TeleportService:TeleportToPlaceInstance(game.PlaceId, id, LocalPlayer) end)
+		end,
+	})
+	settings:AddButton({
+		Text = "Rejoin",
+		Callback = function()
+			Library:Notify({ Title = "Servidor", Content = "Reentrando no servidor..." })
+			if #Players:GetPlayers() <= 1 then
+				LocalPlayer:Kick("\nReentrando...")
+				task.wait()
+				TeleportService:Teleport(game.PlaceId, LocalPlayer)
+			else
+				TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
+			end
+		end,
+	})
+
+	-----------------------------------------------------------------
+	-- Aba Config
+	-----------------------------------------------------------------
+	local cfg = Window:AddTab("Config")
+
+	if not canFS then
+		cfg:AddLabel("Seu executor não suporta arquivos (writefile/readfile/listfiles). O sistema de config está desativado.")
+	end
+
+	cfg:AddSection("Criar config")
+	local nameBox = cfg:AddTextbox({ Text = "Nome da config", Placeholder = "ex: legit, rage..." })
+
+	local dropdown
+	local function refreshList(selectName)
+		local list = Library:GetConfigs()
+		dropdown:Refresh(list)
+		local target = selectName or state.Selected
+		if target and table.find(list, target) then
+			dropdown:Set(target, true)
+			state.Selected = target
+		else
+			state.Selected = nil
+		end
+		saveMeta()
+	end
+
+	cfg:AddButton({
+		Text = "Criar config",
+		Callback = function()
+			local name = sanitize(nameBox.Box.Text)
+			if name == "" then
+				Library:Notify({ Title = "Config", Content = "Digite um nome válido.", Force = true })
+				return
+			end
+			if canFS and isfile(cfgPath(name)) then
+				Library:Notify({ Title = "Config", Content = "Já existe uma config com esse nome.", Force = true })
+				return
+			end
+			local ok, err = Library:SaveConfig(name)
+			if ok then
+				nameBox:Set("", true)
+				refreshList(name)
+				Library:Notify({ Title = "Config", Content = "Config '" .. name .. "' criada." })
+			else
+				Library:Notify({ Title = "Config", Content = tostring(err), Force = true })
+			end
+		end,
+	})
+
+	cfg:AddSection("Gerenciar configs")
+	dropdown = cfg:AddDropdown({
+		Text = "Configs", Options = Library:GetConfigs(), Default = state.Selected,
+		Callback = function(v)
+			state.Selected = v
+			saveMeta()
+		end,
+	})
+	if state.Selected and not table.find(Library:GetConfigs(), state.Selected) then
+		state.Selected = nil
+		dropdown:Set(nil, true)
+	end
+
+	cfg:AddButton({
+		Text = "Salvar config selecionada",
+		Callback = function()
+			if not state.Selected then
+				Library:Notify({ Title = "Config", Content = "Selecione uma config.", Force = true })
+				return
+			end
+			local ok, err = Library:SaveConfig(state.Selected)
+			Library._dirty = false
+			if ok then
+				Library:Notify({ Title = "Config", Content = "Config '" .. state.Selected .. "' salva." })
+			else
+				Library:Notify({ Title = "Config", Content = tostring(err), Force = true })
+			end
+		end,
+	})
+	cfg:AddButton({
+		Text = "Carregar config selecionada",
+		Callback = function()
+			if not state.Selected then
+				Library:Notify({ Title = "Config", Content = "Selecione uma config.", Force = true })
+				return
+			end
+			local ok, err = Library:LoadConfig(state.Selected)
+			if ok then
+				Library:Notify({ Title = "Config", Content = "Config '" .. state.Selected .. "' carregada." })
+			else
+				Library:Notify({ Title = "Config", Content = tostring(err), Force = true })
+			end
+		end,
+	})
+	cfg:AddButton({
+		Text = "Excluir config selecionada",
+		Callback = function()
+			if not state.Selected then
+				Library:Notify({ Title = "Config", Content = "Selecione uma config.", Force = true })
+				return
+			end
+			local name = state.Selected
+			local ok, err = Library:DeleteConfig(name)
+			if ok then
+				state.Selected = nil
+				refreshList()
+				Library:Notify({ Title = "Config", Content = "Config '" .. name .. "' excluída." })
+			else
+				Library:Notify({ Title = "Config", Content = tostring(err), Force = true })
+			end
+		end,
+	})
+	cfg:AddButton({
+		Text = "Atualizar lista",
+		Callback = function() refreshList() end,
+	})
+
+	cfg:AddSection("Automático")
+	cfg:AddToggle({
+		Text = "Auto Save (salva a config selecionada)", Default = state.AutoSave,
+		Callback = function(v)
+			state.AutoSave = v
+			saveMeta()
+			if v and not state.Selected then
+				Library:Notify({ Title = "Config", Content = "Selecione uma config para o Auto Save funcionar.", Force = true })
+			end
+		end,
+	})
+	cfg:AddToggle({
+		Text = "Auto Load (carrega ao abrir o script)", Default = state.AutoLoad,
+		Callback = function(v)
+			state.AutoLoad = v
+			saveMeta()
+		end,
+	})
+
+	selectTab(settings)
+
+	-- Fechar / botão flutuante
+	closeBtn.MouseButton1Click:Connect(function()
+		main.Visible = false
+		Library:Notify({ Title = title, Content = "UI escondida. Aperte " .. tostring(Library.Flags.BB_ToggleKey or "a tecla") .. " para abrir." })
+	end)
+
+	if opts.ToggleButton ~= false and (UIS.TouchEnabled or opts.ToggleButton) then
+		local fb = New("ImageButton", {
+			Position = UDim2.new(0, 12, 0.5, -22), Size = UDim2.fromOffset(44, 44),
+			BackgroundColor3 = Theme.Main, Image = icon, BorderSizePixel = 0, Parent = gui,
+		}, { Corner(8), New("UIStroke", { Color = Color3.new(0, 0, 0), Thickness = 1 }) })
+		fb.MouseButton1Click:Connect(function() Window:Toggle() end)
+	end
+
+	Library.Window = Window
+	return Window
+end
+
+return Library
