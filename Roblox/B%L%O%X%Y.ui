@@ -1,19 +1,19 @@
 --[[
     BloxyBlox Hub - LibraryUI
-    Abas padrão: Settings e Config. O jogador/dev adiciona mais abas com Window:AddTab().
+    Default tabs: Settings and Config. Add more tabs with Window:AddTab().
 
-    API rápida:
+    Quick API:
         local Library = loadstring(readfile("BloxyBloxHub.lua"))()
         local Window  = Library:CreateWindow({
             Title = "BloxyBlox Hub",
             Icon = "rbxassetid://104862457212946",
             ConfigFolder = "BloxyBloxHub",
-            ConfigExtension = ".txt",     -- ou ".lua"
+            ConfigExtension = ".txt",     -- or ".lua"
             ToggleKey = Enum.KeyCode.RightControl,
         })
         local Tab = Window:AddTab("Main")
-        Tab:AddSection("Texto")
-        Tab:AddLabel("Texto")                         -- retorna obj:SetText()
+        Tab:AddSection("Text")
+        Tab:AddLabel("Text")                          -- returns obj:SetText()
         Tab:AddButton({Text=, Callback=})
         Tab:AddToggle({Text=, Default=, Flag=, Callback=})
         Tab:AddSlider({Text=, Min=, Max=, Default=, Increment=, Flag=, Callback=})
@@ -21,7 +21,8 @@
         Tab:AddTextbox({Text=, Default=, Placeholder=, Flag=, Callback=})
         Tab:AddKeybind({Text=, Default=Enum.KeyCode.F, Flag=, Callback=})
         Library:Notify({Title=, Content=, Duration=})
-        Library.Flags.SuaFlag   -- valor atual de qualquer elemento com Flag
+        Library.Flags.YourFlag   -- current value of any element with a Flag
+        Library:Unload()         -- closes the whole UI
 ]]
 
 local Players = game:GetService("Players")
@@ -29,7 +30,6 @@ local UIS = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 local HttpService = game:GetService("HttpService")
 local TeleportService = game:GetService("TeleportService")
-local RunService = game:GetService("RunService")
 
 local LocalPlayer = Players.LocalPlayer
 
@@ -110,7 +110,7 @@ local function SafeCall(fn, ...)
 	if type(fn) ~= "function" then return end
 	local ok, err = pcall(fn, ...)
 	if not ok then
-		warn("[BloxyBlox Hub] Erro no callback: " .. tostring(err))
+		warn("[BloxyBlox Hub] Callback error: " .. tostring(err))
 	end
 end
 
@@ -130,7 +130,6 @@ local function GetGuiParent()
 	end
 	local ok, cg = pcall(function() return game:GetService("CoreGui") end)
 	if ok and cg then
-		-- testa se temos permissão
 		local t = Instance.new("Folder")
 		local okp = pcall(function() t.Parent = cg end)
 		t:Destroy()
@@ -146,7 +145,7 @@ function Library:_Dirty()
 end
 
 ---------------------------------------------------------------------
--- Notificações
+-- Notifications
 ---------------------------------------------------------------------
 local NotifyHolder
 
@@ -156,7 +155,7 @@ local function EnsureNotifyHolder(gui)
 		Name = "Notifications",
 		AnchorPoint = Vector2.new(1, 1),
 		Position = UDim2.new(1, -12, 1, -12),
-		Size = UDim2.new(0, 270, 1, -24),
+		Size = UDim2.new(0, 280, 1, -24),
 		BackgroundTransparency = 1,
 		Parent = gui,
 	}, {
@@ -179,11 +178,10 @@ function Library:Notify(opts)
 		Size = UDim2.new(1, 0, 0, 0),
 		AutomaticSize = Enum.AutomaticSize.Y,
 		BackgroundTransparency = 1,
-		ClipsDescendants = false,
 		Parent = NotifyHolder,
 	})
 	local card = New("Frame", {
-		Position = UDim2.new(1, 300, 0, 0),
+		Position = UDim2.new(1, 320, 0, 0),
 		Size = UDim2.new(1, 0, 0, 0),
 		AutomaticSize = Enum.AutomaticSize.Y,
 		BackgroundColor3 = Theme.Element,
@@ -191,18 +189,29 @@ function Library:Notify(opts)
 		Parent = container,
 	}, {
 		Corner(6),
-		Padding(46, 8, 10, 10),
 		New("UIStroke", { Color = Color3.fromRGB(60, 60, 60), Thickness = 1 }),
-		New("UIListLayout", { Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder }),
 	})
+
+	-- hub icon on the left, inside the card (outside the text layout)
 	New("ImageLabel", {
-		Name = "HubIcon",
-		Position = UDim2.new(0, -36, 0, 0),
-		Size = UDim2.fromOffset(28, 28),
+		Position = UDim2.fromOffset(10, 10),
+		Size = UDim2.fromOffset(30, 30),
 		BackgroundTransparency = 1,
-		Image = opts.Icon or Library.Icon or "",
+		Image = Library.Icon or "",
 		ScaleType = Enum.ScaleType.Fit,
 		Parent = card,
+	})
+
+	-- text area on the right of the icon
+	local textArea = New("Frame", {
+		Position = UDim2.fromOffset(50, 0),
+		Size = UDim2.new(1, -50, 0, 0),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		BackgroundTransparency = 1,
+		Parent = card,
+	}, {
+		Padding(0, 9, 10, 10),
+		New("UIListLayout", { Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder }),
 	})
 	New("TextLabel", {
 		LayoutOrder = 1,
@@ -211,7 +220,7 @@ function Library:Notify(opts)
 		Font = Theme.Font, TextSize = 14, TextColor3 = Theme.Text,
 		TextXAlignment = Enum.TextXAlignment.Left,
 		Text = opts.Title or "BloxyBlox Hub",
-		Parent = card,
+		Parent = textArea,
 	})
 	New("TextLabel", {
 		LayoutOrder = 2,
@@ -223,15 +232,14 @@ function Library:Notify(opts)
 		TextXAlignment = Enum.TextXAlignment.Left,
 		TextYAlignment = Enum.TextYAlignment.Top,
 		Text = tostring(opts.Content or ""),
-		Parent = card,
+		Parent = textArea,
 	})
-	-- barra de tempo
 	local barBg = New("Frame", {
 		LayoutOrder = 3,
 		Size = UDim2.new(1, 0, 0, 3),
 		BackgroundColor3 = Theme.Off,
 		BorderSizePixel = 0,
-		Parent = card,
+		Parent = textArea,
 	}, { Corner(2) })
 	local bar = New("Frame", {
 		Size = UDim2.fromScale(1, 1),
@@ -245,14 +253,14 @@ function Library:Notify(opts)
 
 	task.delay(duration, function()
 		if not card.Parent then return end
-		local tw = Tween(card, { Position = UDim2.new(1, 300, 0, 0) }, 0.25)
+		local tw = Tween(card, { Position = UDim2.new(1, 320, 0, 0) }, 0.25)
 		tw.Completed:Wait()
 		container:Destroy()
 	end)
 end
 
 ---------------------------------------------------------------------
--- Elementos (anexados a cada aba)
+-- Elements (attached to each tab)
 ---------------------------------------------------------------------
 local function Row(page, height)
 	return New("Frame", {
@@ -334,7 +342,9 @@ local function AttachElements(tab, page)
 		btn.MouseLeave:Connect(function() Tween(btn, { BackgroundColor3 = Theme.Element }) end)
 		btn.MouseButton1Click:Connect(function()
 			Tween(btn, { BackgroundColor3 = Theme.Panel }, 0.08)
-			task.delay(0.1, function() Tween(btn, { BackgroundColor3 = Theme.Element }) end)
+			task.delay(0.1, function()
+				if btn.Parent then Tween(btn, { BackgroundColor3 = Theme.Element }) end
+			end)
 			SafeCall(o.Callback)
 		end)
 		local obj = {}
@@ -471,7 +481,7 @@ local function AttachElements(tab, page)
 			AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -28, 0, 0), Size = UDim2.new(0.5, -10, 0, 32),
 			BackgroundTransparency = 1, Font = Theme.FontReg, TextSize = 13, TextColor3 = Theme.SubText,
 			TextXAlignment = Enum.TextXAlignment.Right, TextTruncate = Enum.TextTruncate.AtEnd,
-			Text = "Nenhum", Parent = row,
+			Text = "None", Parent = row,
 		})
 		local arrow = New("TextLabel", {
 			AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -8, 0, 0), Size = UDim2.fromOffset(16, 32),
@@ -523,7 +533,7 @@ local function AttachElements(tab, page)
 		end
 		function obj:Set(v, silent)
 			obj.Value = v
-			valLbl.Text = v ~= nil and tostring(v) or "Nenhum"
+			valLbl.Text = v ~= nil and tostring(v) or "None"
 			if o.Flag then Library.Flags[o.Flag] = v end
 			highlight()
 			if not silent then
@@ -535,7 +545,7 @@ local function AttachElements(tab, page)
 			obj.Options = newOptions or {}
 			if not keepValue then
 				obj.Value = nil
-				valLbl.Text = "Nenhum"
+				valLbl.Text = "None"
 				if o.Flag then Library.Flags[o.Flag] = nil end
 			end
 			build()
@@ -605,7 +615,7 @@ local function AttachElements(tab, page)
 			listening = true
 			btn.Text = "..."
 		end)
-		Connect(UIS.InputBegan, function(input, gp)
+		Connect(UIS.InputBegan, function(input)
 			if listening then
 				if input.UserInputType == Enum.UserInputType.Keyboard then
 					listening = false
@@ -617,7 +627,8 @@ local function AttachElements(tab, page)
 				end
 				return
 			end
-			if gp then return end
+			-- ignore only while typing in a TextBox (gameProcessed is unreliable in executors)
+			if UIS:GetFocusedTextBox() then return end
 			if input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode.Name == obj.Value then
 				SafeCall(o.Callback, obj.Value)
 			end
@@ -628,7 +639,7 @@ local function AttachElements(tab, page)
 end
 
 ---------------------------------------------------------------------
--- Janela
+-- Window
 ---------------------------------------------------------------------
 function Library:CreateWindow(opts)
 	opts = opts or {}
@@ -703,7 +714,7 @@ function Library:CreateWindow(opts)
 		BackgroundColor3 = Color3.new(0, 0, 0), BorderSizePixel = 0, Parent = main,
 	})
 
-	-- Arrastar
+	-- Dragging
 	do
 		local dragging, dragStart, startPos
 		header.InputBegan:Connect(function(input)
@@ -724,7 +735,7 @@ function Library:CreateWindow(opts)
 		end)
 	end
 
-	-- Corpo
+	-- Body
 	local sidebar = New("Frame", {
 		Position = UDim2.fromOffset(8, 52), Size = UDim2.new(0, 150, 1, -60),
 		BackgroundColor3 = Theme.Panel, BorderSizePixel = 0, Parent = main,
@@ -770,20 +781,25 @@ function Library:CreateWindow(opts)
 	end
 
 	function Window:Toggle()
+		if Library._unloaded then return end
 		main.Visible = not main.Visible
 	end
 	function Window:Notify(o) Library:Notify(o) end
 	function Window:Destroy() Library:Unload() end
 
+	-- Fully closes the UI: disconnects everything and destroys the ScreenGui
 	function Library:Unload()
+		if Library._unloaded then return end
 		Library._unloaded = true
+		if Library._onUnload then pcall(Library._onUnload) end
 		for _, c in ipairs(Library._conns) do pcall(function() c:Disconnect() end) end
 		table.clear(Library._conns)
-		gui:Destroy()
+		pcall(function() gui:Destroy() end)
+		NotifyHolder = nil
 	end
 
 	-----------------------------------------------------------------
-	-- Sistema de config
+	-- Config system
 	-----------------------------------------------------------------
 	local canFS = (writefile and readfile and isfile and isfolder and makefolder and listfiles and delfile) and true or false
 	local state = { Selected = nil, AutoSave = false, AutoLoad = false }
@@ -832,10 +848,10 @@ function Library:CreateWindow(opts)
 		return list
 	end
 
-	function Library:SaveConfig(name, silent)
-		if not canFS then return false, "Seu executor não suporta arquivos." end
+	function Library:SaveConfig(name)
+		if not canFS then return false, "Your executor does not support file functions." end
 		name = sanitize(name)
-		if name == "" then return false, "Nome inválido." end
+		if name == "" then return false, "Invalid name." end
 		ensureFolder()
 		local ok, err = pcall(function()
 			writefile(cfgPath(name), HttpService:JSONEncode(Library.Flags))
@@ -845,12 +861,12 @@ function Library:CreateWindow(opts)
 	end
 
 	function Library:LoadConfig(name)
-		if not canFS then return false, "Seu executor não suporta arquivos." end
+		if not canFS then return false, "Your executor does not support file functions." end
 		name = sanitize(name)
 		local path = cfgPath(name)
-		if name == "" or not isfile(path) then return false, "Config não encontrada." end
+		if name == "" or not isfile(path) then return false, "Config not found." end
 		local ok, data = pcall(function() return HttpService:JSONDecode(readfile(path)) end)
-		if not ok or type(data) ~= "table" then return false, "Arquivo de config inválido." end
+		if not ok or type(data) ~= "table" then return false, "Invalid config file." end
 		Library._loading = true
 		for flag, value in pairs(data) do
 			local opt = Library.Options[flag]
@@ -864,133 +880,139 @@ function Library:CreateWindow(opts)
 	end
 
 	function Library:DeleteConfig(name)
-		if not canFS then return false, "Seu executor não suporta arquivos." end
+		if not canFS then return false, "Your executor does not support file functions." end
 		name = sanitize(name)
 		local path = cfgPath(name)
-		if not isfile(path) then return false, "Config não encontrada." end
+		if not isfile(path) then return false, "Config not found." end
 		local ok, err = pcall(delfile, path)
 		return ok, ok and nil or tostring(err)
 	end
 
 	loadMeta()
 
-	-- Auto save
+	-- save pending changes when the UI is closed
+	Library._onUnload = function()
+		if state.AutoSave and state.Selected and Library._dirty then
+			Library:SaveConfig(state.Selected)
+		end
+	end
+
+	-- Auto save loop
 	task.spawn(function()
 		while not Library._unloaded do
 			task.wait(2)
 			if Library._dirty and state.AutoSave and state.Selected then
 				Library._dirty = false
-				Library:SaveConfig(state.Selected, true)
+				Library:SaveConfig(state.Selected)
 			end
 		end
 	end)
 
 	local autoLoaded = false
 	function Window:LoadAutoConfig()
-		if autoLoaded then return end
+		if autoLoaded or Library._unloaded then return end
 		autoLoaded = true
 		if state.AutoLoad and state.Selected then
 			local ok, err = Library:LoadConfig(state.Selected)
 			if ok then
-				Library:Notify({ Title = "Config", Content = "Config '" .. state.Selected .. "' carregada automaticamente." })
+				Library:Notify({ Title = "Config", Content = "Config '" .. state.Selected .. "' auto loaded." })
 			else
 				Library:Notify({ Title = "Config", Content = tostring(err), Force = true })
 			end
 		end
 	end
-	-- carrega sozinho depois que o script terminar de montar as abas
 	task.delay(1.5, function() if not Library._unloaded then Window:LoadAutoConfig() end end)
 
 	-----------------------------------------------------------------
-	-- Aba Settings
+	-- Settings tab
 	-----------------------------------------------------------------
 	local settings = Window:AddTab("Settings")
 
-	settings:AddSection("Notificações")
+	settings:AddSection("Notifications")
 	settings:AddToggle({
-		Text = "Ativar notificações", Default = true, Flag = "BB_Notifications",
+		Text = "Enable notifications", Default = true, Flag = "BB_Notifications",
 		Callback = function(v) Library.Settings.Notifications = v end,
 	})
 	settings:AddSlider({
-		Text = "Duração das notificações", Min = 1, Max = 10, Default = 4, Increment = 1, Suffix = "s",
+		Text = "Notification duration", Min = 1, Max = 10, Default = 4, Increment = 1, Suffix = "s",
 		Flag = "BB_NotifyDuration",
 		Callback = function(v) Library.Settings.NotifyDuration = v end,
 	})
 	settings:AddButton({
-		Text = "Testar notificação",
+		Text = "Test notification",
 		Callback = function()
-			Library:Notify({ Title = "BloxyBlox Hub", Content = "Notificação de teste funcionando!" })
+			Library:Notify({ Title = "BloxyBlox Hub", Content = "Test notification is working!" })
 		end,
 	})
 
 	settings:AddSection("Interface")
 	local toggleKey = opts.ToggleKey or Enum.KeyCode.RightControl
 	settings:AddKeybind({
-		Text = "Abrir/Fechar UI", Default = toggleKey, Flag = "BB_ToggleKey",
+		Text = "Toggle UI key", Default = toggleKey, Flag = "BB_ToggleKey",
 		Callback = function() Window:Toggle() end,
 	})
 	settings:AddButton({
-		Text = "Descarregar UI",
+		Text = "Unload UI",
 		Callback = function() Library:Unload() end,
 	})
 
-	settings:AddSection("Servidor")
-	local jobId = game.JobId ~= "" and game.JobId or "(vazio no Studio)"
+	settings:AddSection("Server")
+	local jobId = game.JobId ~= "" and game.JobId or "(empty in Studio)"
 	settings:AddLabel("JobID: " .. jobId)
 	settings:AddLabel("PlaceId: " .. tostring(game.PlaceId))
 	settings:AddButton({
-		Text = "Copiar JobID",
+		Text = "Copy JobID",
 		Callback = function()
 			if Copy(game.JobId) then
-				Library:Notify({ Title = "Servidor", Content = "JobID copiado!" })
+				Library:Notify({ Title = "Server", Content = "JobID copied!" })
 			else
-				Library:Notify({ Title = "Servidor", Content = "Seu executor não suporta clipboard.", Force = true })
+				Library:Notify({ Title = "Server", Content = "Your executor does not support clipboard.", Force = true })
 			end
 		end,
 	})
 	settings:AddButton({
-		Text = "Copiar PlaceId",
+		Text = "Copy PlaceId",
 		Callback = function()
 			if Copy(tostring(game.PlaceId)) then
-				Library:Notify({ Title = "Servidor", Content = "PlaceId copiado!" })
+				Library:Notify({ Title = "Server", Content = "PlaceId copied!" })
 			else
-				Library:Notify({ Title = "Servidor", Content = "Seu executor não suporta clipboard.", Force = true })
+				Library:Notify({ Title = "Server", Content = "Your executor does not support clipboard.", Force = true })
 			end
 		end,
 	})
 	settings:AddButton({
-		Text = "Copiar script de join",
+		Text = "Copy join script",
 		Callback = function()
 			local s = string.format(
 				'game:GetService("TeleportService"):TeleportToPlaceInstance(%d, "%s", game.Players.LocalPlayer)',
 				game.PlaceId, game.JobId
 			)
 			if Copy(s) then
-				Library:Notify({ Title = "Servidor", Content = "Script de join copiado!" })
+				Library:Notify({ Title = "Server", Content = "Join script copied!" })
 			else
-				Library:Notify({ Title = "Servidor", Content = "Seu executor não suporta clipboard.", Force = true })
+				Library:Notify({ Title = "Server", Content = "Your executor does not support clipboard.", Force = true })
 			end
 		end,
 	})
-	local joinBox = settings:AddTextbox({ Text = "JobID para entrar", Placeholder = "cole o JobID aqui" })
+	local joinBox = settings:AddTextbox({ Text = "JobID to join", Placeholder = "paste JobID here" })
 	settings:AddButton({
-		Text = "Entrar no JobID",
+		Text = "Join JobID",
 		Callback = function()
 			local id = joinBox.Box.Text:gsub("%s", "")
 			if id == "" then
-				Library:Notify({ Title = "Servidor", Content = "Cole um JobID primeiro.", Force = true })
+				Library:Notify({ Title = "Server", Content = "Paste a JobID first.", Force = true })
 				return
 			end
-			Library:Notify({ Title = "Servidor", Content = "Teleportando..." })
+			Library:Notify({ Title = "Server", Content = "Teleporting..." })
 			pcall(function() TeleportService:TeleportToPlaceInstance(game.PlaceId, id, LocalPlayer) end)
 		end,
 	})
 	settings:AddButton({
 		Text = "Rejoin",
 		Callback = function()
-			Library:Notify({ Title = "Servidor", Content = "Reentrando no servidor..." })
+			Library:Notify({ Title = "Server", Content = "Rejoining server..." })
 			if #Players:GetPlayers() <= 1 then
-				LocalPlayer:Kick("\nReentrando...")
+				LocalPlayer:Kick("\nRejoining...")
 				task.wait()
 				TeleportService:Teleport(game.PlaceId, LocalPlayer)
 			else
@@ -1000,16 +1022,16 @@ function Library:CreateWindow(opts)
 	})
 
 	-----------------------------------------------------------------
-	-- Aba Config
+	-- Config tab
 	-----------------------------------------------------------------
 	local cfg = Window:AddTab("Config")
 
 	if not canFS then
-		cfg:AddLabel("Seu executor não suporta arquivos (writefile/readfile/listfiles). O sistema de config está desativado.")
+		cfg:AddLabel("Your executor does not support file functions (writefile/readfile/listfiles). The config system is disabled.")
 	end
 
-	cfg:AddSection("Criar config")
-	local nameBox = cfg:AddTextbox({ Text = "Nome da config", Placeholder = "ex: legit, rage..." })
+	cfg:AddSection("Create config")
+	local nameBox = cfg:AddTextbox({ Text = "Config name", Placeholder = "e.g. legit, rage..." })
 
 	local dropdown
 	local function refreshList(selectName)
@@ -1026,29 +1048,29 @@ function Library:CreateWindow(opts)
 	end
 
 	cfg:AddButton({
-		Text = "Criar config",
+		Text = "Create config",
 		Callback = function()
 			local name = sanitize(nameBox.Box.Text)
 			if name == "" then
-				Library:Notify({ Title = "Config", Content = "Digite um nome válido.", Force = true })
+				Library:Notify({ Title = "Config", Content = "Type a valid name.", Force = true })
 				return
 			end
 			if canFS and isfile(cfgPath(name)) then
-				Library:Notify({ Title = "Config", Content = "Já existe uma config com esse nome.", Force = true })
+				Library:Notify({ Title = "Config", Content = "A config with this name already exists.", Force = true })
 				return
 			end
 			local ok, err = Library:SaveConfig(name)
 			if ok then
 				nameBox:Set("", true)
 				refreshList(name)
-				Library:Notify({ Title = "Config", Content = "Config '" .. name .. "' criada." })
+				Library:Notify({ Title = "Config", Content = "Config '" .. name .. "' created." })
 			else
 				Library:Notify({ Title = "Config", Content = tostring(err), Force = true })
 			end
 		end,
 	})
 
-	cfg:AddSection("Gerenciar configs")
+	cfg:AddSection("Manage configs")
 	dropdown = cfg:AddDropdown({
 		Text = "Configs", Options = Library:GetConfigs(), Default = state.Selected,
 		Callback = function(v)
@@ -1062,41 +1084,41 @@ function Library:CreateWindow(opts)
 	end
 
 	cfg:AddButton({
-		Text = "Salvar config selecionada",
+		Text = "Save selected config",
 		Callback = function()
 			if not state.Selected then
-				Library:Notify({ Title = "Config", Content = "Selecione uma config.", Force = true })
+				Library:Notify({ Title = "Config", Content = "Select a config first.", Force = true })
 				return
 			end
 			local ok, err = Library:SaveConfig(state.Selected)
 			Library._dirty = false
 			if ok then
-				Library:Notify({ Title = "Config", Content = "Config '" .. state.Selected .. "' salva." })
+				Library:Notify({ Title = "Config", Content = "Config '" .. state.Selected .. "' saved." })
 			else
 				Library:Notify({ Title = "Config", Content = tostring(err), Force = true })
 			end
 		end,
 	})
 	cfg:AddButton({
-		Text = "Carregar config selecionada",
+		Text = "Load selected config",
 		Callback = function()
 			if not state.Selected then
-				Library:Notify({ Title = "Config", Content = "Selecione uma config.", Force = true })
+				Library:Notify({ Title = "Config", Content = "Select a config first.", Force = true })
 				return
 			end
 			local ok, err = Library:LoadConfig(state.Selected)
 			if ok then
-				Library:Notify({ Title = "Config", Content = "Config '" .. state.Selected .. "' carregada." })
+				Library:Notify({ Title = "Config", Content = "Config '" .. state.Selected .. "' loaded." })
 			else
 				Library:Notify({ Title = "Config", Content = tostring(err), Force = true })
 			end
 		end,
 	})
 	cfg:AddButton({
-		Text = "Excluir config selecionada",
+		Text = "Delete selected config",
 		Callback = function()
 			if not state.Selected then
-				Library:Notify({ Title = "Config", Content = "Selecione uma config.", Force = true })
+				Library:Notify({ Title = "Config", Content = "Select a config first.", Force = true })
 				return
 			end
 			local name = state.Selected
@@ -1104,30 +1126,30 @@ function Library:CreateWindow(opts)
 			if ok then
 				state.Selected = nil
 				refreshList()
-				Library:Notify({ Title = "Config", Content = "Config '" .. name .. "' excluída." })
+				Library:Notify({ Title = "Config", Content = "Config '" .. name .. "' deleted." })
 			else
 				Library:Notify({ Title = "Config", Content = tostring(err), Force = true })
 			end
 		end,
 	})
 	cfg:AddButton({
-		Text = "Atualizar lista",
+		Text = "Refresh list",
 		Callback = function() refreshList() end,
 	})
 
-	cfg:AddSection("Automático")
+	cfg:AddSection("Automatic")
 	cfg:AddToggle({
-		Text = "Auto Save (salva a config selecionada)", Default = state.AutoSave,
+		Text = "Auto Save (saves selected config)", Default = state.AutoSave,
 		Callback = function(v)
 			state.AutoSave = v
 			saveMeta()
 			if v and not state.Selected then
-				Library:Notify({ Title = "Config", Content = "Selecione uma config para o Auto Save funcionar.", Force = true })
+				Library:Notify({ Title = "Config", Content = "Select a config for Auto Save to work.", Force = true })
 			end
 		end,
 	})
 	cfg:AddToggle({
-		Text = "Auto Load (carrega ao abrir o script)", Default = state.AutoLoad,
+		Text = "Auto Load (loads on script start)", Default = state.AutoLoad,
 		Callback = function(v)
 			state.AutoLoad = v
 			saveMeta()
@@ -1136,15 +1158,15 @@ function Library:CreateWindow(opts)
 
 	selectTab(settings)
 
-	-- Fechar / botão flutuante
-	-- X encerra a interface inteira: janela, botão flutuante e notificações.
-	-- Para apenas esconder/mostrar, use a tecla configurada em Settings ou o botão flutuante.
+	-- X button: closes the entire UI
 	closeBtn.MouseButton1Click:Connect(function()
 		Library:Unload()
 	end)
 
-	if opts.ToggleButton ~= false and (UIS.TouchEnabled or opts.ToggleButton) then
+	-- Floating toggle button (shown by default, disable with ToggleButton = false)
+	if opts.ToggleButton ~= false then
 		local fb = New("ImageButton", {
+			Name = "ToggleButton",
 			Position = UDim2.new(0, 12, 0.5, -22), Size = UDim2.fromOffset(44, 44),
 			BackgroundColor3 = Theme.Main, Image = icon, BorderSizePixel = 0, Parent = gui,
 		}, { Corner(8), New("UIStroke", { Color = Color3.new(0, 0, 0), Thickness = 1 }) })
