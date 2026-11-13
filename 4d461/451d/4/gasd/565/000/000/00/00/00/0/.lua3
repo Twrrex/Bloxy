@@ -196,10 +196,12 @@ function Library:Notify(opts)
 		New("UIListLayout", { Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder }),
 	})
 	New("ImageLabel", {
+		Name = "HubIcon",
 		Position = UDim2.new(0, -36, 0, 0),
 		Size = UDim2.fromOffset(28, 28),
 		BackgroundTransparency = 1,
-		Image = Library.Icon or "",
+		Image = opts.Icon or Library.Icon or "",
+		ScaleType = Enum.ScaleType.Fit,
 		Parent = card,
 	})
 	New("TextLabel", {
@@ -1135,9 +1137,10 @@ function Library:CreateWindow(opts)
 	selectTab(settings)
 
 	-- Fechar / botão flutuante
+	-- X encerra a interface inteira: janela, botão flutuante e notificações.
+	-- Para apenas esconder/mostrar, use a tecla configurada em Settings ou o botão flutuante.
 	closeBtn.MouseButton1Click:Connect(function()
-		main.Visible = false
-		Library:Notify({ Title = title, Content = "UI escondida. Aperte " .. tostring(Library.Flags.BB_ToggleKey or "a tecla") .. " para abrir." })
+		Library:Unload()
 	end)
 
 	if opts.ToggleButton ~= false and (UIS.TouchEnabled or opts.ToggleButton) then
